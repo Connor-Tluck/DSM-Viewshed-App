@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Download Unmodified DSM</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol/ol.css">
+    <script src="https://cdn.jsdelivr.net/npm/ol/dist/ol.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+        }
+
+        #map {
+            width: 100%;
+            height: 100vh;
+        }
+
+        #controls {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: white;
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+            z-index: 1000;
+        }
+    </style>
+</head>
+<body>
+    <div id="controls">
+        <label for="apiKey">API Key:</label>
+        <input type="text" id="apiKey" placeholder="Enter your API key" style="width: 300px;">
+        <br><br>
+        <label for="radius">Radius (meters):</label>
+        <input type="number" id="radius" max="100" min="1" value="50">
+        <button id="downloadDsm">Download DSM</button>
+    </div>
+    <div id="map"></div>
+
+    <script>
+        const nearmapCoverageEndpoint = 'https://api.nearmap.com/staticmap/v2/coverage.json';
+        const nearmapDsmEndpoint = 'https://api.nearmap.com/staticmap/v2/surveys';
+
+        const map = new ol.Map({
+            target: 'map',
+            layers: [
+                new ol.layer.Tile({
+                    source: new ol.source.XYZ({
+                        url: 'https://{a-c}.tile.openstreetmap.org/{z}/{x}/{y}.png'
+                    })
+                })
+            ],
+            view: new ol.View({
+                center: ol.proj.fromLonLat([-122.4194, 37.7749]),
+                zoom: 12
+            })
+        });
+
+        const vectorSource = new ol.source.Vector();
+        const vectorLayer = new ol.layer.Vector({
+            source: vectorSource,
+            style: new ol.style.Style({
+                image: new ol.style.Circle({
+                    radius: 6,
+                    fill: new ol.style.Fill({ color: 'red' }),
+                    stroke: new ol.style.Stroke({ color: 'white', width: 2 })
+                })
+            })
+        });
+        map.addLayer(vectorLayer);
+
+        let selectedCoordinates = null;
+
+        map.on('click', (event) => {
+            const coords = ol.proj.toLonLat(event.coordinate);
+            selectedCoordinates = coords;
+
+            vectorSource.clear();
+            const pointFeature = new ol.Feature({
+                geometry: new ol.geom.Point(event.coordinate)
+            });
+            vectorSource.addFeature(pointFeature);
+
+            console.log('Selected Coordinates:', coords);
+        });
+
+        document.getElementById('downloadDsm').addEventListener('click', async () => {
+            const apiKey = document.getElementById('apiKey').value;
+            if (!apiKey) {
+                alert('Please enter your API key.');
+                return;
+            }
+
+            if (!selectedCoordinates) {
+                alert('Please click on the map to select a location.');
+                return;
+            }
+
+            const radius = document.getElementById('radius').value;
+            const [lon, lat] = selectedCoordinates;
+
+            try {
+                // Step 1: Fetch coverage information
+                const coverageResponse = await fetch(
+                    `${nearmapCoverageEndpoint}?point=${lon},${lat}&radius=${radius}&resources=DetailDsm&apikey=${apiKey}`,
+                    { headers: { Accept: 'application/json' } }
+                );
+
+                if (!coverageResponse.ok) {
+                    throw new Error(`Coverage API error: ${coverageResponse.statusText}`);
+                }
+
+                const coverageData = await coverageResponse.json();
+                const surveys = coverageData.surveys;
+
+                if (!surveys || surveys.length === 0) {
+                    throw new Error('No DSM data available for the selected area.');
+                }
+
+                const { id: surveyId } = surveys[0];
+                const transactionToken = coverageData.transactionToken;
+
+                // Step 2: Fetch the DSM GeoTIFF
+                const size = 1024; // Set the size of the GeoTIFF
+                const dsmResponse = await fetch(
+                    `${nearmapDsmEndpoint}/${surveyId}/DetailDsm.tif?point=${lon},${lat}&radius=${radius}&size=${size}x${size}&transactionToken=${transactionToken}&apikey=${apiKey}`,
+                    { headers: { Accept: 'image/tiff' } }
+                );
+
+                if (!dsmResponse.ok) {
+                    throw new Error(`DSM API error: ${dsmResponse.statusText}`);
+                }
+
+                const dsmBlob = await dsmResponse.blob();
+
+                // Step 3: Download the DSM file
+                const downloadLink = document.createElement('a');
+                downloadLink.href = URL.createObjectURL(dsmBlob);
+                downloadLink.download = `Unmodified_DSM_${surveyId}.tif`;
+                document.body.appendChild(downloadLink);
+                downloadLink.click();
+                document.body.removeChild(downloadLink);
+
+                alert('DSM file downloaded successfully!');
+            } catch (error) {
+                console.error('Error:', error);
+                alert(`Error: ${error.message}`);
+            }
+        });
+    </script>
+</body>
+</html>
